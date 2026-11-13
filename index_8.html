@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>English AI Voice Tutor</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config = { darkMode: 'class' }</script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Sarabun', sans-serif; }
+  .mic-on { animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(239,68,68,.6)} 70%{box-shadow:0 0 0 16px rgba(239,68,68,0)} 100%{box-shadow:0 0 0 0 rgba(239,68,68,0)} }
+  .scroll-thin::-webkit-scrollbar { width: 6px } .scroll-thin::-webkit-scrollbar-thumb { background:#94a3b8; border-radius:3px }
+  .yt-wrap { position:relative; padding-top:56.25%; } .yt-wrap > div, .yt-wrap iframe { position:absolute; inset:0; width:100%; height:100%; }
+</style>
+</head>
+<body class="bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen transition-colors">
+
+<header class="bg-white dark:bg-slate-800 shadow sticky top-0 z-20">
+  <div class="max-w-5xl mx-auto px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+    <h1 class="text-xl font-bold text-indigo-600 dark:text-indigo-400"><i class="fa-solid fa-headset"></i> English AI Voice Tutor</h1>
+    <div class="flex items-center gap-2">
+      <button id="tabShadow" class="px-3 py-1.5 rounded-lg font-semibold">🎬 Shadowing</button>
+      <button id="tabChat" class="px-3 py-1.5 rounded-lg font-semibold">💬 AI Dialogue</button>
+      <button id="btnSettings" class="w-9 h-9 rounded-lg bg-slate-200 dark:bg-slate-700" title="ตั้งค่า"><i class="fa-solid fa-gear"></i></button>
+      <button id="btnTheme" class="w-9 h-9 rounded-lg bg-slate-200 dark:bg-slate-700" title="สลับธีม"><i class="fa-solid fa-moon"></i></button>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-5xl mx-auto p-4">
+  <div id="srWarn" class="hidden mb-4 p-3 rounded-lg bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 text-sm">
+    <i class="fa-solid fa-triangle-exclamation"></i> เบราว์เซอร์นี้ไม่รองรับการรู้จำเสียง แนะนำให้ใช้ Google Chrome หรือ Microsoft Edge
+  </div>
+  <div id="fileWarn" class="hidden mb-4 p-3 rounded-lg bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200 text-sm">
+    <i class="fa-solid fa-circle-info"></i> เปิดไฟล์จากเครื่องโดยตรง (file://) คลิป YouTube อาจเล่นไม่ได้ — ถ้าต้องการใช้คลิป YouTube ให้เปิดผ่านลิงก์ https เช่น GAS Web App หรือ GitHub Pages (โหมด My Video ใช้ได้ปกติ)
+  </div>
+
+  <!-- ===== Shadowing Mode ===== -->
+  <section id="modeShadow">
+    <div class="grid grid-cols-3 gap-3 mb-4">
+      <div class="bg-white dark:bg-slate-800 rounded-xl p-3 text-center shadow"><div class="text-xs text-slate-500 dark:text-slate-400">ผ่านแล้ว (≥80%)</div><div id="stPassed" class="text-2xl font-bold text-emerald-500">0</div></div>
+      <div class="bg-white dark:bg-slate-800 rounded-xl p-3 text-center shadow"><div class="text-xs text-slate-500 dark:text-slate-400">คะแนนเฉลี่ย</div><div id="stAvg" class="text-2xl font-bold text-indigo-500">0%</div></div>
+      <div class="bg-white dark:bg-slate-800 rounded-xl p-3 text-center shadow"><div class="text-xs text-slate-500 dark:text-slate-400">คะแนนสูงสุด</div><div id="stBest" class="text-2xl font-bold text-amber-500">0%</div></div>
+    </div>
+
+    <div class="flex gap-2 mb-4 border-b border-slate-300 dark:border-slate-700">
+      <button id="subLib" class="px-4 py-2 font-semibold border-b-2">📚 คลังประโยค</button>
+      <button id="subVid" class="px-4 py-2 font-semibold border-b-2">🎞️ My Video</button>
+    </div>
+
+    <!-- Library pane -->
+    <div id="paneLib">
+      <div id="catBar" class="flex flex-wrap gap-2 mb-4"></div>
+
+      <div class="bg-white dark:bg-slate-800 rounded-2xl shadow p-6">
+        <div class="flex justify-between items-center text-sm text-slate-500 dark:text-slate-400 mb-2">
+          <span id="phraseIdx"></span>
+          <span id="phraseDone"></span>
+        </div>
+
+        <div id="emptyReview" class="hidden text-center py-10 text-slate-500 dark:text-slate-400">
+          <div class="text-4xl mb-2">🎉</div>ยังไม่มีประโยคที่ต้องทบทวน<br><span class="text-sm">ประโยคที่ได้คะแนนต่ำกว่า 80% จะมาอยู่ที่นี่ เรียงจากคะแนนต่ำสุดก่อน</span>
+        </div>
+
+        <div id="phraseArea">
+          <!-- YouTube clip -->
+          <div id="ytBox" class="hidden mb-4">
+            <div class="yt-wrap rounded-xl overflow-hidden bg-black"><div id="ytPlayer"></div></div>
+            <div class="flex flex-wrap gap-2 justify-center mt-2 text-sm">
+              <button id="ytReplay" class="px-3 py-1.5 rounded-lg bg-indigo-500 text-white"><i class="fa-solid fa-rotate-left"></i> เล่นฉากนี้ซ้ำ</button>
+              <button id="ytEdit" class="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700"><i class="fa-solid fa-pen"></i> แก้คลิป</button>
+            </div>
+          </div>
+
+          <p id="phraseEn" class="text-2xl md:text-3xl font-bold text-center my-4 leading-snug"></p>
+          <p id="phraseTh" class="text-center text-lg text-indigo-600 dark:text-indigo-300"></p>
+          <p id="phraseCtx" class="text-center text-sm text-slate-500 dark:text-slate-400 mt-2"></p>
+
+          <div class="text-center mt-3">
+            <button id="ytAdd" class="text-sm px-3 py-1.5 rounded-lg bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-300"><i class="fa-brands fa-youtube"></i> ผูกคลิป YouTube กับประโยคนี้</button>
+          </div>
+
+          <div id="ytForm" class="hidden mt-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-900 space-y-2 text-sm">
+            <input id="ytUrl" class="w-full px-3 py-2 rounded-lg bg-white dark:bg-slate-800" placeholder="วางลิงก์ YouTube เช่น https://www.youtube.com/watch?v=...">
+            <div class="flex gap-2 items-center flex-wrap">
+              <label>เริ่ม</label><input id="ytStart" class="w-24 px-2 py-2 rounded-lg bg-white dark:bg-slate-800" placeholder="1:23">
+              <label>จบ</label><input id="ytEnd" class="w-24 px-2 py-2 rounded-lg bg-white dark:bg-slate-800" placeholder="1:27">
+              <span class="text-xs text-slate-500">(นาที:วินาที หรือวินาที)</span>
+            </div>
+            <div class="flex gap-2">
+              <button id="ytSave" class="px-3 py-1.5 rounded-lg bg-indigo-500 text-white">บันทึก</button>
+              <button id="ytRemove" class="px-3 py-1.5 rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300">ลบคลิป</button>
+              <button id="ytCancel" class="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700">ยกเลิก</button>
+            </div>
+            <p id="ytMsg" class="text-xs text-rose-500"></p>
+          </div>
+
+          <div class="flex justify-center items-center gap-4 my-6">
+            <button id="btnPrev" class="w-11 h-11 rounded-full bg-slate-200 dark:bg-slate-700"><i class="fa-solid fa-chevron-left"></i></button>
+            <button id="btnListen" class="w-14 h-14 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white text-xl" title="ฟังเสียงเจ้าของภาษา"><i class="fa-solid fa-volume-high"></i></button>
+            <button id="btnSlow" class="w-11 h-11 rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-600 dark:text-indigo-300" title="ฟังช้า"><i class="fa-solid fa-gauge-simple-low"></i></button>
+            <button id="btnRec" class="w-16 h-16 rounded-full bg-rose-500 hover:bg-rose-600 text-white text-2xl" title="กดแล้วพูดตาม"><i class="fa-solid fa-microphone"></i></button>
+            <button id="btnNext" class="w-11 h-11 rounded-full bg-slate-200 dark:bg-slate-700"><i class="fa-solid fa-chevron-right"></i></button>
+          </div>
+
+          <canvas id="vizLib" class="w-full h-16 rounded-lg bg-slate-100 dark:bg-slate-900"></canvas>
+          <div id="resLib" class="hidden mt-5 p-4 rounded-xl bg-slate-50 dark:bg-slate-900"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- My Video pane -->
+    <div id="paneVid" class="hidden">
+      <div class="bg-white dark:bg-slate-800 rounded-2xl shadow p-4 mb-4 grid md:grid-cols-2 gap-3 text-sm">
+        <label class="block">
+          <span class="font-semibold"><i class="fa-solid fa-film"></i> ไฟล์วิดีโอ (.mp4 / .webm)</span>
+          <input id="vidFile" type="file" accept="video/*" class="mt-1 block w-full text-sm">
+        </label>
+        <label class="block">
+          <span class="font-semibold"><i class="fa-solid fa-closed-captioning"></i> ไฟล์ซับภาษาอังกฤษ (.srt / .vtt)</span>
+          <input id="subFile" type="file" accept=".srt,.vtt,text/plain" class="mt-1 block w-full text-sm">
+        </label>
+        <p class="md:col-span-2 text-xs text-slate-500 dark:text-slate-400">ไฟล์จะเปิดในเบราว์เซอร์เครื่องนี้เท่านั้น ไม่ถูกอัปโหลดไปไหน — แอปจะตัดเป็นประโยคตามซับให้อัตโนมัติ</p>
+      </div>
+
+      <div id="vidEmpty" class="text-center py-12 text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-800 rounded-2xl shadow">
+        <div class="text-4xl mb-2">🎞️</div>เลือกไฟล์วิดีโอและไฟล์ซับเพื่อเริ่มฝึกกับหนังเรื่องโปรด
+      </div>
+
+      <div id="vidMain" class="hidden grid md:grid-cols-5 gap-4">
+        <div class="md:col-span-3 bg-white dark:bg-slate-800 rounded-2xl shadow p-4">
+          <video id="vid" class="w-full rounded-xl bg-black" playsinline></video>
+          <p id="vidLine" class="text-xl md:text-2xl font-bold text-center my-4 leading-snug"></p>
+          <div class="flex justify-center items-center gap-3 flex-wrap">
+            <button id="vPrev" class="w-11 h-11 rounded-full bg-slate-200 dark:bg-slate-700"><i class="fa-solid fa-chevron-left"></i></button>
+            <button id="vPlay" class="w-14 h-14 rounded-full bg-indigo-500 text-white text-xl" title="เล่นฉากนี้"><i class="fa-solid fa-play"></i></button>
+            <button id="vSlow" class="w-11 h-11 rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-600 dark:text-indigo-300" title="เล่นช้า 0.75x"><i class="fa-solid fa-gauge-simple-low"></i></button>
+            <button id="vRec" class="w-16 h-16 rounded-full bg-rose-500 text-white text-2xl" title="พูดตาม"><i class="fa-solid fa-microphone"></i></button>
+            <button id="vNext" class="w-11 h-11 rounded-full bg-slate-200 dark:bg-slate-700"><i class="fa-solid fa-chevron-right"></i></button>
+          </div>
+          <div class="flex justify-center gap-4 mt-3 text-sm">
+            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" id="vAutoMic" checked> เปิดไมค์อัตโนมัติหลังฉากจบ</label>
+            <label class="flex items-center gap-1">ขยายช่วง <select id="vPad" class="bg-slate-100 dark:bg-slate-700 rounded px-1"><option value="0">0s</option><option value="0.3" selected>0.3s</option><option value="0.7">0.7s</option></select></label>
+          </div>
+          <canvas id="vizVid" class="w-full h-12 mt-3 rounded-lg bg-slate-100 dark:bg-slate-900"></canvas>
+          <div id="resVid" class="hidden mt-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-900"></div>
+        </div>
+        <div class="md:col-span-2 bg-white dark:bg-slate-800 rounded-2xl shadow p-3">
+          <input id="cueSearch" class="w-full mb-2 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-sm" placeholder="🔍 ค้นหาประโยค...">
+          <div id="cueList" class="scroll-thin max-h-[70vh] overflow-y-auto space-y-1 text-sm"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== AI Dialogue Mode ===== -->
+  <section id="modeChat" class="hidden">
+    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow p-4 mb-3 flex flex-wrap gap-3 items-center">
+      <label class="text-sm font-semibold">สถานการณ์:</label>
+      <select id="scenario" class="px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700">
+        <option value="casual">☕ Casual Chat</option>
+        <option value="interview">💼 Job Interview</option>
+        <option value="coffee">🥤 Coffee Shop</option>
+        <option value="airport">✈️ Airport Check-in</option>
+        <option value="hotel">🏨 Hotel Front Desk</option>
+        <option value="doctor">🩺 Doctor Visit</option>
+      </select>
+      <div class="flex flex-wrap gap-4 ml-auto text-sm">
+        <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="usePracticed" class="w-4 h-4" checked> 🧠 ให้ AI ชวนใช้ประโยคที่เพิ่งฝึก</label>
+        <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="autoLoop" class="w-4 h-4" checked> Hands-Free</label>
+      </div>
+      <button id="btnNewChat" class="px-3 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-sm"><i class="fa-solid fa-rotate"></i> เริ่มใหม่</button>
+    </div>
+
+    <div id="practicedBar" class="hidden mb-3 text-xs flex flex-wrap gap-1 items-center"></div>
+
+    <div id="chatBox" class="scroll-thin bg-white dark:bg-slate-800 rounded-2xl shadow p-4 h-[50vh] overflow-y-auto space-y-3"></div>
+    <canvas id="vizChat" class="w-full h-12 mt-3 rounded-lg bg-white dark:bg-slate-800"></canvas>
+
+    <div class="mt-3 flex gap-2 items-center">
+      <button id="btnChatMic" class="w-14 h-14 shrink-0 rounded-full bg-rose-500 hover:bg-rose-600 text-white text-xl"><i class="fa-solid fa-microphone"></i></button>
+      <input id="chatInput" class="flex-1 px-4 py-3 rounded-xl bg-white dark:bg-slate-800 shadow outline-none" placeholder="พูดหรือพิมพ์ภาษาอังกฤษ แล้วกด Enter...">
+      <button id="btnSend" class="w-12 h-12 shrink-0 rounded-xl bg-indigo-500 text-white"><i class="fa-solid fa-paper-plane"></i></button>
+    </div>
+    <p id="chatStatus" class="text-xs text-slate-500 dark:text-slate-400 mt-2 min-h-4"></p>
+  </section>
+</main>
+
+<!-- Settings modal -->
+<div id="settingsModal" class="hidden fixed inset-0 bg-black/50 z-30 flex items-center justify-center p-4">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl p-6 w-full max-w-md space-y-4">
+    <h2 class="text-lg font-bold"><i class="fa-solid fa-sliders"></i> ตั้งค่า</h2>
+    <div>
+      <label class="text-sm font-semibold">Gemini API Key</label>
+      <input id="apiKey" type="password" class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700" placeholder="AIza...">
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">ขอรับฟรีที่ aistudio.google.com/apikey — เก็บไว้ในเครื่องนี้เท่านั้น</p>
+    </div>
+    <div>
+      <label class="text-sm font-semibold">สำเนียง (Accent)</label>
+      <select id="accent" class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700">
+        <option value="en-US">🇺🇸 American (en-US)</option>
+        <option value="en-GB">🇬🇧 British (en-GB)</option>
+        <option value="en-AU">🇦🇺 Australian (en-AU)</option>
+      </select>
+    </div>
+    <div>
+      <label class="text-sm font-semibold">เสียง (Voice)</label>
+      <select id="voice" class="w-full mt-1 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700"></select>
+    </div>
+    <div>
+      <label class="text-sm font-semibold">ความเร็ว: <span id="rateVal">1.0</span></label>
+      <input id="rate" type="range" min="0.5" max="1.5" step="0.1" value="1" class="w-full">
+    </div>
+    <div>
+      <label class="text-sm font-semibold">ระดับเสียง (Pitch): <span id="pitchVal">1.0</span></label>
+      <input id="pitch" type="range" min="0.5" max="1.5" step="0.1" value="1" class="w-full">
+    </div>
+    <div class="flex gap-2 justify-between pt-2">
+      <button id="btnResetStats" class="px-3 py-2 rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300 text-sm">ล้างคะแนน</button>
+      <button id="btnCloseSettings" class="px-4 py-2 rounded-lg bg-indigo-500 text-white font-semibold">บันทึก</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================= Data ================= */
+const PHRASES = {
+  "Casual & Greeting": [
+    ["What's up? Long time no see!", "ว่าไง? ไม่ได้เจอกันนานเลย!", "ทักทายเพื่อนที่ไม่ได้เจอนาน"],
+    ["How have you been lately?", "ช่วงนี้เป็นยังไงบ้าง?", "ถามสารทุกข์สุกดิบ"],
+    ["I'm doing great, thanks for asking.", "สบายดีมาก ขอบคุณที่ถามนะ", "ตอบเมื่อมีคนถามว่าเป็นยังไง"],
+    ["Nice to meet you, I've heard a lot about you.", "ยินดีที่ได้รู้จัก ได้ยินเรื่องคุณมาเยอะเลย", "เจอคนที่เพื่อนแนะนำ"],
+    ["Catch you later!", "ไว้เจอกันนะ!", "บอกลาแบบไม่เป็นทางการ"],
+    ["It's been ages since we last talked.", "ไม่ได้คุยกันนานมากแล้ว", "เริ่มบทสนทนากับคนรู้จักเก่า"],
+    ["Take care and keep in touch.", "ดูแลตัวเองด้วย แล้วติดต่อกันนะ", "บอกลาแบบอบอุ่น"]
+  ],
+  "Coffee Shop & Dining": [
+    ["Can I get a large iced latte, please?", "ขอลาเต้เย็นแก้วใหญ่หนึ่งแก้วครับ/ค่ะ", "สั่งกาแฟที่เคาน์เตอร์"],
+    ["Could I have it with oat milk instead?", "ขอเปลี่ยนเป็นนมโอ๊ตได้ไหม?", "ขอเปลี่ยนส่วนผสม"],
+    ["For here or to go?", "ทานที่นี่หรือกลับบ้าน?", "พนักงานถามลูกค้า"],
+    ["Could we get the check, please?", "ขอเช็คบิลด้วยครับ/ค่ะ", "จะจ่ายเงินที่ร้านอาหาร"],
+    ["I'd like to make a reservation for two.", "ขอจองโต๊ะสำหรับสองคน", "โทรจองร้านอาหาร"],
+    ["What do you recommend?", "คุณแนะนำอะไรบ้าง?", "ถามเมนูแนะนำ"],
+    ["This is absolutely delicious.", "อันนี้อร่อยมากๆ เลย", "ชมอาหาร"]
+  ],
+  "Travel & Airport": [
+    ["Where is the check-in counter for this flight?", "เคาน์เตอร์เช็คอินของเที่ยวบินนี้อยู่ที่ไหน?", "หาเคาน์เตอร์ในสนามบิน"],
+    ["I'd like a window seat, please.", "ขอที่นั่งริมหน้าต่างครับ/ค่ะ", "ตอนเช็คอิน"],
+    ["How many bags can I check in?", "โหลดกระเป๋าได้กี่ใบ?", "ถามเรื่องสัมภาระ"],
+    ["My flight has been delayed.", "เที่ยวบินของฉันดีเลย์", "แจ้งปัญหาเที่ยวบิน"],
+    ["How do I get to the city center from here?", "จากตรงนี้ไปใจกลางเมืองยังไง?", "ถามทางหลังลงเครื่อง"],
+    ["I'm here on vacation for a week.", "มาเที่ยวพักร้อนหนึ่งสัปดาห์", "ตอบเจ้าหน้าที่ตรวจคนเข้าเมือง"],
+    ["Is breakfast included in the room rate?", "ราคาห้องรวมอาหารเช้าไหม?", "เช็คอินโรงแรม"]
+  ],
+  "Workplace & Business": [
+    ["Let's touch base next week.", "สัปดาห์หน้าเรามาคุยอัปเดตกันนะ", "นัดคุยงานครั้งถัดไป"],
+    ["Could you send me the report by Friday?", "ช่วยส่งรายงานให้ภายในวันศุกร์ได้ไหม?", "ขอเอกสารจากเพื่อนร่วมงาน"],
+    ["I'll get back to you on that.", "เรื่องนั้นเดี๋ยวผม/ฉันจะแจ้งกลับนะ", "ยังตอบไม่ได้ทันที"],
+    ["Let's put this on the agenda for the meeting.", "เอาเรื่องนี้ใส่ในวาระการประชุมกัน", "วางแผนการประชุม"],
+    ["Thanks for your patience while we sort this out.", "ขอบคุณที่อดทนรอระหว่างที่เราแก้ไขปัญหา", "ตอบลูกค้า/ผู้ร่วมงาน"],
+    ["Can we reschedule our meeting?", "เราเลื่อนนัดประชุมได้ไหม?", "ขอเลื่อนนัด"],
+    ["I really appreciate your help on this project.", "ขอบคุณมากที่ช่วยงานโปรเจกต์นี้", "ขอบคุณเพื่อนร่วมงาน"]
+  ],
+  "Emotion & Expressive": [
+    ["I can't believe it!", "ไม่อยากจะเชื่อเลย!", "ตกใจหรือดีใจมาก"],
+    ["That's the best news I've heard all day.", "นี่เป็นข่าวดีที่สุดของวันนี้เลย", "ดีใจกับข่าวดี"],
+    ["I'm so sorry to hear that.", "เสียใจด้วยนะที่ได้ยินแบบนั้น", "แสดงความเห็นใจ"],
+    ["You scared me half to death!", "ตกใจแทบแย่เลย!", "ถูกทำให้ตกใจ"],
+    ["I'm really proud of you.", "ภูมิใจในตัวคุณมากๆ", "ชื่นชมความสำเร็จ"],
+    ["Don't worry, everything is going to be okay.", "ไม่ต้องกังวลนะ ทุกอย่างจะโอเค", "ปลอบใจ"],
+    ["Seriously? You've got to be kidding me.", "จริงดิ? ล้อเล่นใช่ไหมเนี่ย", "ไม่อยากเชื่อ/ประชด"]
+  ]
+};
+const REVIEW = '🔁 ทบทวน';
+
+const SCENARIOS = {
+  casual:   { name: "Casual Chat", role: "a friendly native English-speaking friend chatting casually about daily life, hobbies, and plans", opener: "Hey there! How's your day going so far?" },
+  interview:{ name: "Job Interview", role: "a professional but warm hiring manager conducting a job interview", opener: "Good morning, thanks for coming in today. Could you start by telling me a little about yourself?" },
+  coffee:   { name: "Coffee Shop", role: "a cheerful barista at a busy coffee shop taking the customer's order", opener: "Hi, welcome in! What can I get started for you today?" },
+  airport:  { name: "Airport Check-in", role: "an airline check-in agent at an international airport", opener: "Good afternoon! May I see your passport, please? Where are you flying to today?" },
+  hotel:    { name: "Hotel Front Desk", role: "a hotel receptionist checking in a guest", opener: "Good evening and welcome! Do you have a reservation with us?" },
+  doctor:   { name: "Doctor Visit", role: "a kind general practitioner doctor talking with a patient", opener: "Hello, please have a seat. What brings you in today?" }
+};
+
+/* ================= Storage ================= */
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem('evt_' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('evt_' + k, JSON.stringify(v)); } catch {} }
+};
+const settings = Object.assign({ apiKey: '', accent: 'en-US', voice: '', rate: 1, pitch: 1, theme: 'light' }, LS.get('settings', {}));
+let scores = LS.get('scores', {});     // key -> best score
+let clips = LS.get('clips', {});       // phraseKey -> {id,start,end}
+let recent = LS.get('recent', []);     // recently practiced sentences
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+if (location.protocol === 'file:') $('fileWarn').classList.remove('hidden');
+
+/* ================= Theme & Tabs ================= */
+function applyTheme() {
+  document.documentElement.classList.toggle('dark', settings.theme === 'dark');
+  $('btnTheme').innerHTML = settings.theme === 'dark' ? '<i class="fa-solid fa-sun"></i>' : '<i class="fa-solid fa-moon"></i>';
+}
+$('btnTheme').onclick = () => { settings.theme = settings.theme === 'dark' ? 'light' : 'dark'; LS.set('settings', settings); applyTheme(); };
+applyTheme();
+
+const tabCls = on => 'px-3 py-1.5 rounded-lg font-semibold ' + (on ? 'bg-indigo-500 text-white' : 'bg-slate-200 dark:bg-slate-700');
+function setMode(m) {
+  $('modeShadow').classList.toggle('hidden', m !== 'shadow');
+  $('modeChat').classList.toggle('hidden', m !== 'chat');
+  $('tabShadow').className = tabCls(m === 'shadow'); $('tabChat').className = tabCls(m === 'chat');
+  stopAll();
+  if (m === 'chat') { renderPracticed(); if (!$('chatBox').children.length) newChat(); }
+}
+$('tabShadow').onclick = () => setMode('shadow');
+$('tabChat').onclick = () => setMode('chat');
+
+const subCls = on => 'px-4 py-2 font-semibold border-b-2 ' + (on ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500');
+function setSub(s) {
+  $('paneLib').classList.toggle('hidden', s !== 'lib'); $('paneVid').classList.toggle('hidden', s !== 'vid');
+  $('subLib').className = subCls(s === 'lib'); $('subVid').className = subCls(s === 'vid');
+  stopAll(); ytStop(); $('vid').pause();
+}
+$('subLib').onclick = () => setSub('lib');
+$('subVid').onclick = () => setSub('vid');
+
+/* ================= Speech Synthesis ================= */
+let voices = [];
+function loadVoices() {
+  voices = speechSynthesis.getVoices().filter(v => v.lang.replace('_', '-').startsWith('en'));
+  const sel = $('voice'); sel.innerHTML = '';
+  const list = voices.filter(v => v.lang.replace('_', '-') === settings.accent);
+  (list.length ? list : voices).forEach(v => { const o = document.createElement('option'); o.value = v.name; o.textContent = `${v.name} (${v.lang})`; sel.appendChild(o); });
+  if (settings.voice && [...sel.options].some(o => o.value === settings.voice)) sel.value = settings.voice;
+}
+if ('speechSynthesis' in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+function speak(text, opts = {}) {
+  return new Promise(resolve => {
+    if (!('speechSynthesis' in window)) return resolve();
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = settings.accent;
+    const v = voices.find(v => v.name === settings.voice) || voices.find(v => v.lang.replace('_', '-') === settings.accent);
+    if (v) u.voice = v;
+    u.rate = opts.rate || settings.rate; u.pitch = settings.pitch;
+    u.onend = resolve; u.onerror = resolve;
+    speechSynthesis.speak(u);
+  });
+}
+
+/* ================= Speech Recognition ================= */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR) $('srWarn').classList.remove('hidden');
+let recog = null, listening = false;
+function listen({ btn, canvas, onResult, onInterim }) {
+  if (!SR) { $('srWarn').classList.remove('hidden'); return; }
+  if (listening) { recog.stop(); return; }
+  speechSynthesis.cancel();
+  recog = new SR();
+  recog.lang = settings.accent; recog.interimResults = true; recog.maxAlternatives = 1; recog.continuous = false;
+  let finalText = '';
+  recog.onstart = () => { listening = true; btn.classList.add('mic-on'); btn.innerHTML = '<i class="fa-solid fa-stop"></i>'; startViz(canvas); };
+  recog.onresult = e => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) finalText += e.results[i][0].transcript; else interim += e.results[i][0].transcript;
+    }
+    onInterim && onInterim(finalText + interim);
+  };
+  recog.onerror = e => { if (e.error === 'not-allowed') $('chatStatus').textContent = 'กรุณาอนุญาตให้ใช้ไมโครโฟน'; };
+  recog.onend = () => {
+    listening = false; btn.classList.remove('mic-on'); btn.innerHTML = '<i class="fa-solid fa-microphone"></i>'; stopViz();
+    onResult(finalText.trim());
+  };
+  recog.start();
+}
+
+/* ================= Audio Visualizer ================= */
+let audioCtx, analyser, micStream, vizRAF;
+async function startViz(canvasId) {
+  const cv = $(canvasId), ctx = cv.getContext('2d');
+  cv.width = cv.clientWidth * devicePixelRatio; cv.height = cv.clientHeight * devicePixelRatio;
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser(); analyser.fftSize = 1024;
+    audioCtx.createMediaStreamSource(micStream).connect(analyser);
+  } catch { return; }
+  const data = new Uint8Array(analyser.fftSize);
+  const draw = () => {
+    if (!analyser) return;
+    analyser.getByteTimeDomainData(data);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.lineWidth = 2 * devicePixelRatio; ctx.strokeStyle = '#f43f5e'; ctx.beginPath();
+    const step = cv.width / data.length;
+    data.forEach((v, i) => { const y = (v / 255) * cv.height; i ? ctx.lineTo(i * step, y) : ctx.moveTo(0, y); });
+    ctx.stroke(); vizRAF = requestAnimationFrame(draw);
+  };
+  draw();
+}
+function stopViz() {
+  cancelAnimationFrame(vizRAF);
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  if (audioCtx) audioCtx.close().catch(() => {});
+  micStream = audioCtx = analyser = null;
+  ['vizLib', 'vizVid', 'vizChat'].forEach(id => { const c = $(id); c.getContext('2d').clearRect(0, 0, c.width, c.height); });
+}
+function stopAll() { try { recog && recog.abort(); } catch {} speechSynthesis.cancel(); }
+
+/* ================= Scoring (shared) ================= */
+const norm = s => s.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9' ]/g, ' ').split(/\s+/).filter(Boolean);
+function scoreSpeech(target, said) {
+  const t = norm(target), s = norm(said);
+  const dp = Array.from({ length: t.length + 1 }, () => Array(s.length + 1).fill(0));
+  for (let i = 1; i <= t.length; i++) for (let j = 1; j <= s.length; j++)
+    dp[i][j] = t[i - 1] === s[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+  const matched = new Set(); let i = t.length, j = s.length;
+  while (i > 0 && j > 0) {
+    if (t[i - 1] === s[j - 1]) { matched.add(i - 1); i--; j--; } else if (dp[i - 1][j] >= dp[i][j - 1]) i--; else j--;
+  }
+  const score = Math.round((2 * dp[t.length][s.length] / (t.length + s.length || 1)) * 100);
+  return { score, words: t.map((w, k) => ({ w, ok: matched.has(k) })) };
+}
+function renderResult(boxId, target, said, key) {
+  const box = $(boxId); box.classList.remove('hidden');
+  if (!said) { box.innerHTML = '<p class="text-center text-slate-500">ไม่ได้ยินเสียง ลองกดไมค์แล้วพูดใหม่อีกครั้ง</p>'; return null; }
+  const { score, words } = scoreSpeech(target, said);
+  const color = score >= 80 ? 'emerald' : score >= 50 ? 'amber' : 'rose';
+  const msg = score >= 90 ? '🎉 ยอดเยี่ยม! ออกเสียงได้เหมือนเจ้าของภาษา' : score >= 80 ? '👍 ผ่าน! ดีมาก' : score >= 50 ? '💪 ใกล้แล้ว ลองฟังอีกครั้งแล้วพูดใหม่' : '🔁 ลองฟังช้าๆ แล้วพูดตามทีละคำ';
+  box.innerHTML = `
+    <div class="flex items-center justify-between mb-2"><span class="font-semibold">Accuracy Match Score</span><span class="text-3xl font-bold text-${color}-500">${score}%</span></div>
+    <div class="w-full h-3 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden"><div class="h-3 bg-${color}-500" style="width:${score}%"></div></div>
+    <div class="mt-3 text-sm"><span class="text-slate-500 dark:text-slate-400">คุณพูดว่า:</span> <i>${esc(said)}</i></div>
+    <div class="mt-2 text-lg leading-relaxed">${words.map(x => `<span class="${x.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500 underline decoration-wavy'}">${esc(x.w)}</span>`).join(' ')}</div>
+    <p class="mt-2 text-sm">${msg}</p>`;
+  if (scores[key] === undefined || score > scores[key]) { scores[key] = score; LS.set('scores', scores); }
+  recent = [target, ...recent.filter(r => r !== target)].slice(0, 10); LS.set('recent', recent);
+  renderStats();
+  return score;
+}
+function renderStats() {
+  const vals = Object.values(scores);
+  $('stPassed').textContent = vals.filter(v => v >= 80).length;
+  $('stAvg').textContent = (vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0) + '%';
+  $('stBest').textContent = (vals.length ? Math.max(...vals) : 0) + '%';
+}
+function interimTo(boxId) { return t => { const b = $(boxId); b.classList.remove('hidden'); b.innerHTML = `<p class="text-slate-500">🎙️ ${esc(t)}…</p>`; }; }
+
+/* ================= Library (phrases + review) ================= */
+let curCat = Object.keys(PHRASES)[0], curIdx = 0;
+function getList() {
+  if (curCat === REVIEW) {
+    const all = [];
+    Object.entries(PHRASES).forEach(([cat, arr]) => arr.forEach((p, i) => {
+      const k = cat + '|' + i; if (scores[k] !== undefined && scores[k] < 80) all.push({ cat, idx: i, p, key: k });
+    }));
+    return all.sort((a, b) => scores[a.key] - scores[b.key]);
+  }
+  return PHRASES[curCat].map((p, i) => ({ cat: curCat, idx: i, p, key: curCat + '|' + i }));
+}
+const curItem = () => getList()[curIdx];
+function renderCats() {
+  $('catBar').innerHTML = '';
+  const reviewCount = Object.keys(scores).filter(k => !k.startsWith('vid|') && scores[k] < 80).length;
+  [...Object.keys(PHRASES), REVIEW].forEach(c => {
+    const b = document.createElement('button');
+    b.innerHTML = c === REVIEW ? `${c} <span class="ml-1 px-1.5 rounded-full text-xs ${c === curCat ? 'bg-white/30' : 'bg-rose-500 text-white'}">${reviewCount}</span>` : esc(c);
+    b.className = 'px-3 py-1.5 rounded-full text-sm font-semibold ' + (c === curCat ? 'bg-indigo-500 text-white' : 'bg-white dark:bg-slate-800 shadow');
+    b.onclick = () => { curCat = c; curIdx = 0; renderCats(); renderPhrase(); };
+    $('catBar').appendChild(b);
+  });
+}
+function renderPhrase() {
+  const list = getList();
+  $('ytForm').classList.add('hidden');
+  if (!list.length) { $('phraseArea').classList.add('hidden'); $('emptyReview').classList.remove('hidden'); $('phraseIdx').textContent = ''; $('phraseDone').textContent = ''; ytHide(); return; }
+  $('phraseArea').classList.remove('hidden'); $('emptyReview').classList.add('hidden');
+  if (curIdx >= list.length) curIdx = 0;
+  const it = list[curIdx];
+  $('phraseEn').textContent = it.p[0]; $('phraseTh').textContent = it.p[1];
+  $('phraseCtx').innerHTML = `<i class="fa-regular fa-lightbulb"></i> ${esc(it.p[2])}${curCat === REVIEW ? ` · <span class="text-indigo-500">${esc(it.cat)}</span>` : ''}`;
+  $('phraseIdx').textContent = `${curIdx + 1} / ${list.length}`;
+  const best = scores[it.key];
+  $('phraseDone').innerHTML = best !== undefined ? `<span class="${best >= 80 ? 'text-emerald-500' : 'text-amber-500'}"><i class="fa-solid fa-trophy"></i> best ${best}%</span>` : '';
+  $('resLib').classList.add('hidden');
+  const clip = clips[it.key];
+  $('ytAdd').classList.toggle('hidden', !!clip);
+  if (clip) ytShow(clip, false); else ytHide();
+}
+function moveLib(d) { const n = getList().length; if (!n) return; curIdx = (curIdx + d + n) % n; renderPhrase(); }
+$('btnListen').onclick = () => { const it = curItem(); if (!it) return; clips[it.key] ? ytPlayClip(clips[it.key]) : speak(it.p[0]); };
+$('btnSlow').onclick = () => { const it = curItem(); if (it) speak(it.p[0], { rate: 0.6 }); };
+$('btnPrev').onclick = () => moveLib(-1);
+$('btnNext').onclick = () => moveLib(1);
+$('btnRec').onclick = () => {
+  const it = curItem(); if (!it) return; ytStop();
+  listen({ btn: $('btnRec'), canvas: 'vizLib', onInterim: interimTo('resLib'),
+    onResult: said => {
+      const target = it.p[0], key = it.key;
+      renderResult('resLib', target, said, key);
+      const b = scores[key];
+      $('phraseDone').innerHTML = b !== undefined ? `<span class="${b >= 80 ? 'text-emerald-500' : 'text-amber-500'}"><i class="fa-solid fa-trophy"></i> best ${b}%</span>` : '';
+      renderCats();
+    } });
+};
+
+/* ================= YouTube clips ================= */
+let ytPlayer = null, ytReady = false, ytPending = null, ytCurrent = null, ytAutoMic = false;
+(function loadYT() { const s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(s); })();
+window.onYouTubeIframeAPIReady = () => { ytReady = true; if (ytPending) { const p = ytPending; ytPending = null; ytShow(p.clip, p.autoplay); } };
+function ytParseId(url) { const m = String(url).match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([\w-]{11})/); return m ? m[1] : (/^[\w-]{11}$/.test(url.trim()) ? url.trim() : null); }
+function parseTime(s) {
+  s = String(s).trim(); if (!s) return null;
+  const parts = s.split(':').map(Number); if (parts.some(isNaN)) return null;
+  return parts.reduce((a, b) => a * 60 + b, 0);
+}
+const fmtTime = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+function ytShow(clip, autoplay) {
+  $('ytBox').classList.remove('hidden');
+  if (!ytReady) { ytPending = { clip, autoplay }; return; }
+  ytCurrent = clip;
+  const opts = { videoId: clip.id, startSeconds: clip.start, endSeconds: clip.end };
+  if (!ytPlayer) {
+    ytPlayer = new YT.Player('ytPlayer', {
+      videoId: clip.id, playerVars: { start: Math.floor(clip.start), end: Math.ceil(clip.end), rel: 0, modestbranding: 1, playsinline: 1, cc_load_policy: 0 },
+      events: {
+        onReady: () => { if (autoplay) ytPlayer.playVideo(); },
+        onStateChange: e => { if (e.data === YT.PlayerState.ENDED && ytAutoMic) { ytAutoMic = false; setTimeout(() => $('btnRec').click(), 250); } }
+      }
+    });
+  } else if (autoplay) ytPlayer.loadVideoById(opts); else ytPlayer.cueVideoById(opts);
+}
+function ytPlayClip(clip) { ytAutoMic = true; ytShow(clip, true); }
+function ytHide() { $('ytBox').classList.add('hidden'); ytStop(); }
+function ytStop() { try { ytPlayer && ytPlayer.pauseVideo && ytPlayer.pauseVideo(); } catch {} ytAutoMic = false; }
+$('ytReplay').onclick = () => ytCurrent && ytPlayClip(ytCurrent);
+function openYtForm() {
+  const it = curItem(), c = clips[it.key];
+  $('ytUrl').value = c ? `https://www.youtube.com/watch?v=${c.id}` : '';
+  $('ytStart').value = c ? fmtTime(c.start) : ''; $('ytEnd').value = c ? fmtTime(c.end) : '';
+  $('ytMsg').textContent = ''; $('ytRemove').classList.toggle('hidden', !c);
+  $('ytForm').classList.remove('hidden');
+}
+$('ytAdd').onclick = openYtForm; $('ytEdit').onclick = openYtForm;
+$('ytCancel').onclick = () => $('ytForm').classList.add('hidden');
+$('ytSave').onclick = () => {
+  const id = ytParseId($('ytUrl').value), start = parseTime($('ytStart').value), end = parseTime($('ytEnd').value);
+  if (!id) return $('ytMsg').textContent = 'ลิงก์ YouTube ไม่ถูกต้อง';
+  if (start === null || end === null || end <= start) return $('ytMsg').textContent = 'กรุณาใส่เวลาเริ่ม-จบให้ถูกต้อง (จบต้องมากกว่าเริ่ม)';
+  const it = curItem(); clips[it.key] = { id, start, end }; LS.set('clips', clips);
+  renderPhrase(); ytPlayClip(clips[it.key]);
+};
+$('ytRemove').onclick = () => { const it = curItem(); delete clips[it.key]; LS.set('clips', clips); renderPhrase(); };
+
+/* ================= My Video (file + subtitles) ================= */
+let cues = [], cueIdx = 0, vidName = '', segEnd = null, segAutoMic = false;
+const vid = $('vid');
+function parseSubs(text) {
+  const out = [];
+  const re = /(?:(\d+):)?(\d{1,2}):(\d{2})[,.](\d{1,3})\s*-->\s*(?:(\d+):)?(\d{1,2}):(\d{2})[,.](\d{1,3})[^\n]*\n([\s\S]*?)(?=\n\s*\n|$)/g;
+  const toS = (h, m, s, ms) => (+h || 0) * 3600 + +m * 60 + +s + (+ms.padEnd(3, '0')) / 1000;
+  let m;
+  text = text.replace(/\r/g, '');
+  while ((m = re.exec(text))) {
+    const line = m[9].replace(/<[^>]+>/g, '').replace(/\{[^}]+\}/g, '').replace(/\n/g, ' ').replace(/^-\s*/, '').replace(/\s+/g, ' ').trim();
+    if (line && /[a-zA-Z]/.test(line)) out.push({ start: toS(m[1], m[2], m[3], m[4]), end: toS(m[5], m[6], m[7], m[8]), text: line });
+  }
+  return out;
+}
+function checkVidReady() {
+  const ready = vid.src && cues.length;
+  $('vidMain').classList.toggle('hidden', !ready); $('vidEmpty').classList.toggle('hidden', !!ready);
+  if (ready) { cueIdx = 0; renderCueList(); selectCue(0, false); }
+}
+$('vidFile').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (vid.src) URL.revokeObjectURL(vid.src);
+  vid.src = URL.createObjectURL(f); vidName = f.name; checkVidReady();
+};
+$('subFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  cues = parseSubs(await f.text());
+  if (!cues.length) { $('vidEmpty').innerHTML = '<div class="text-4xl mb-2">⚠️</div>อ่านไฟล์ซับไม่ได้ กรุณาใช้ไฟล์ .srt หรือ .vtt ภาษาอังกฤษ'; return; }
+  checkVidReady();
+};
+const cueKey = i => `vid|${vidName}|${i}`;
+function renderCueList() {
+  const q = $('cueSearch').value.toLowerCase();
+  $('cueList').innerHTML = cues.map((c, i) => {
+    if (q && !c.text.toLowerCase().includes(q)) return '';
+    const b = scores[cueKey(i)];
+    const badge = b === undefined ? '' : `<span class="shrink-0 text-xs font-bold ${b >= 80 ? 'text-emerald-500' : 'text-amber-500'}">${b}%</span>`;
+    return `<button data-i="${i}" class="cue w-full text-left px-3 py-2 rounded-lg flex gap-2 items-start ${i === cueIdx ? 'bg-indigo-100 dark:bg-indigo-900/50' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}">
+      <span class="shrink-0 text-xs text-slate-400 mt-0.5">${fmtTime(c.start)}</span><span class="flex-1">${esc(c.text)}</span>${badge}</button>`;
+  }).join('');
+}
+$('cueSearch').oninput = renderCueList;
+$('cueList').onclick = e => { const b = e.target.closest('.cue'); if (b) selectCue(+b.dataset.i, true); };
+function selectCue(i, play) {
+  cueIdx = (i + cues.length) % cues.length;
+  $('vidLine').textContent = cues[cueIdx].text; $('resVid').classList.add('hidden');
+  renderCueList();
+  const el = $('cueList').querySelector(`[data-i="${cueIdx}"]`); el && el.scrollIntoView({ block: 'nearest' });
+  if (play) playSeg(1); else { vid.currentTime = cues[cueIdx].start; vid.pause(); }
+}
+function playSeg(rate) {
+  stopAll();
+  const c = cues[cueIdx], pad = +$('vPad').value;
+  vid.playbackRate = rate; vid.currentTime = Math.max(0, c.start - pad); segEnd = c.end + pad;
+  segAutoMic = $('vAutoMic').checked;
+  vid.play().catch(() => {});
+}
+vid.addEventListener('timeupdate', () => {
+  if (segEnd !== null && vid.currentTime >= segEnd) {
+    vid.pause(); segEnd = null;
+    if (segAutoMic) { segAutoMic = false; setTimeout(() => $('vRec').click(), 250); }
+  }
+});
+$('vPlay').onclick = () => playSeg(1);
+$('vSlow').onclick = () => playSeg(0.75);
+$('vPrev').onclick = () => selectCue(cueIdx - 1, true);
+$('vNext').onclick = () => selectCue(cueIdx + 1, true);
+$('vRec').onclick = () => {
+  vid.pause(); segEnd = null;
+  const i = cueIdx;
+  listen({ btn: $('vRec'), canvas: 'vizVid', onInterim: interimTo('resVid'),
+    onResult: said => { renderResult('resVid', cues[i].text, said, cueKey(i)); renderCueList(); } });
+};
+
+/* ================= AI Dialogue Mode ================= */
+let history = [];
+function renderPracticed() {
+  const bar = $('practicedBar');
+  if (!$('usePracticed').checked || !recent.length) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  bar.innerHTML = '<span class="text-slate-500 dark:text-slate-400 mr-1">🧠 ประโยคที่ AI จะชวนใช้:</span>' +
+    recent.slice(0, 5).map(r => `<span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">${esc(r)}</span>`).join('');
+}
+$('usePracticed').onchange = renderPracticed;
+function sysPrompt() {
+  const sc = SCENARIOS[$('scenario').value];
+  const practiced = $('usePracticed').checked && recent.length
+    ? `\nThe learner recently practiced these expressions by shadowing:\n${recent.slice(0, 5).map(r => '- ' + r).join('\n')}\nNaturally steer the conversation so the learner has chances to USE these expressions (or close variations) in context. Don't list them or quiz directly — create situations where they fit. When the learner uses one correctly, set "used_practiced" to that expression.`
+    : '';
+  return `You are an English speaking tutor for a Thai learner. Role-play as ${sc.role} (scenario: ${sc.name}).
+Rules:
+- Keep "reply" natural, friendly, 1-3 short sentences, and always end with a question or prompt to keep the conversation going.
+- Check the learner's latest message for grammar, word choice, and naturalness.${practiced}
+Respond ONLY with valid JSON, no markdown:
+{"reply":"your in-character spoken reply","correct":true/false,"corrected":"grammatically corrected version of the learner's sentence (empty if correct)","native":"a more natural native-speaker phrasing (empty if already natural)","tip_th":"short explanation in Thai of the mistake or a useful tip","used_practiced":"the practiced expression the learner used, or empty"}`;
+}
+function addMsg(who, html) {
+  const d = document.createElement('div');
+  d.className = who === 'ai' ? 'flex gap-2' : 'flex gap-2 justify-end';
+  d.innerHTML = who === 'ai'
+    ? `<div class="w-8 h-8 shrink-0 rounded-full bg-indigo-500 text-white flex items-center justify-center"><i class="fa-solid fa-robot text-sm"></i></div><div class="max-w-[80%] bg-slate-100 dark:bg-slate-700 rounded-2xl rounded-tl-none px-4 py-2">${html}</div>`
+    : `<div class="max-w-[80%] bg-indigo-500 text-white rounded-2xl rounded-tr-none px-4 py-2">${html}</div>`;
+  $('chatBox').appendChild(d); $('chatBox').scrollTop = $('chatBox').scrollHeight;
+}
+function addFeedback(fb) {
+  if (!fb) return;
+  let h = '';
+  if (fb.used_practiced) h += `<div class="text-emerald-600 dark:text-emerald-400"><i class="fa-solid fa-medal"></i> <b>เยี่ยม!</b> คุณใช้ประโยคที่ฝึกไว้ได้จริง: “${esc(fb.used_practiced)}”</div>`;
+  if (fb.correct === false && fb.corrected) h += `<div><i class="fa-solid fa-spell-check text-rose-500"></i> <b>Grammar Fix:</b> ${esc(fb.corrected)}</div>`;
+  if (fb.native) h += `<div><i class="fa-solid fa-star text-amber-500"></i> <b>Native Phrasing:</b> ${esc(fb.native)} <button class="say text-indigo-500 ml-1" data-t="${esc(fb.native)}"><i class="fa-solid fa-volume-high"></i></button></div>`;
+  if (fb.tip_th) h += `<div class="text-slate-600 dark:text-slate-300"><i class="fa-regular fa-lightbulb"></i> ${esc(fb.tip_th)}</div>`;
+  if (fb.correct === true && !fb.native && !fb.corrected) h = '<div class="text-emerald-600"><i class="fa-solid fa-check"></i> ประโยคถูกต้องแล้ว!</div>' + h;
+  if (!h) return;
+  const d = document.createElement('div');
+  d.className = 'ml-auto max-w-[85%] text-sm bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl px-3 py-2 space-y-1';
+  d.innerHTML = h; $('chatBox').appendChild(d); $('chatBox').scrollTop = $('chatBox').scrollHeight;
+}
+$('chatBox').addEventListener('click', e => { const b = e.target.closest('.say'); if (b) speak(b.dataset.t); });
+async function aiSpeak(text) {
+  addMsg('ai', `${esc(text)} <button class="say text-indigo-500 ml-1" data-t="${esc(text)}"><i class="fa-solid fa-volume-high"></i></button>`);
+  $('chatStatus').textContent = '🔊 AI กำลังพูด...';
+  await speak(text);
+  $('chatStatus').textContent = '';
+  if ($('autoLoop').checked && !$('modeChat').classList.contains('hidden')) setTimeout(chatListen, 300);
+}
+function newChat() {
+  stopAll(); history = []; $('chatBox').innerHTML = '';
+  const sc = SCENARIOS[$('scenario').value];
+  history.push({ role: 'model', parts: [{ text: JSON.stringify({ reply: sc.opener }) }] });
+  aiSpeak(sc.opener);
+}
+$('btnNewChat').onclick = newChat;
+$('scenario').onchange = newChat;
+async function sendChat(text) {
+  text = text.trim(); if (!text) return;
+  if (!settings.apiKey) { $('chatStatus').textContent = 'กรุณาใส่ Gemini API Key ในหน้าตั้งค่าก่อน'; openSettings(); return; }
+  addMsg('user', esc(text)); $('chatInput').value = '';
+  history.push({ role: 'user', parts: [{ text }] });
+  $('chatStatus').textContent = '🤔 AI กำลังคิด...';
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(settings.apiKey)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: sysPrompt() }] },
+        contents: history.slice(-20),
+        generationConfig: { temperature: 0.8, responseMimeType: 'application/json' }
+      })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    const raw = data.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '{}';
+    let out; try { out = JSON.parse(raw.replace(/```json|```/g, '')); } catch { out = { reply: raw }; }
+    history.push({ role: 'model', parts: [{ text: raw }] });
+    addFeedback(out);
+    $('chatStatus').textContent = '';
+    await aiSpeak(out.reply || "Sorry, could you say that again?");
+  } catch (err) {
+    history.pop(); $('chatStatus').textContent = '';
+    addMsg('ai', `<span class="text-rose-500"><i class="fa-solid fa-circle-exclamation"></i> เกิดข้อผิดพลาด: ${esc(err.message)}</span>`);
+  }
+}
+function chatListen() {
+  listen({ btn: $('btnChatMic'), canvas: 'vizChat',
+    onInterim: t => { $('chatInput').value = t; $('chatStatus').textContent = '🎙️ กำลังฟัง...'; },
+    onResult: t => { if (t) sendChat(t); else $('chatStatus').textContent = 'ไม่ได้ยินเสียง — กดไมค์เพื่อพูดอีกครั้ง'; } });
+}
+$('btnChatMic').onclick = chatListen;
+$('btnSend').onclick = () => sendChat($('chatInput').value);
+$('chatInput').onkeydown = e => { if (e.key === 'Enter') sendChat($('chatInput').value); };
+
+/* ================= Settings ================= */
+function openSettings() {
+  $('apiKey').value = settings.apiKey; $('accent').value = settings.accent;
+  $('rate').value = settings.rate; $('pitch').value = settings.pitch;
+  $('rateVal').textContent = (+settings.rate).toFixed(1); $('pitchVal').textContent = (+settings.pitch).toFixed(1);
+  loadVoices(); $('settingsModal').classList.remove('hidden');
+}
+$('btnSettings').onclick = openSettings;
+$('accent').onchange = () => { settings.accent = $('accent').value; settings.voice = ''; loadVoices(); };
+$('rate').oninput = () => $('rateVal').textContent = (+$('rate').value).toFixed(1);
+$('pitch').oninput = () => $('pitchVal').textContent = (+$('pitch').value).toFixed(1);
+$('btnCloseSettings').onclick = () => {
+  Object.assign(settings, { apiKey: $('apiKey').value.trim(), accent: $('accent').value, voice: $('voice').value, rate: +$('rate').value, pitch: +$('pitch').value });
+  LS.set('settings', settings); $('settingsModal').classList.add('hidden');
+};
+$('settingsModal').onclick = e => { if (e.target.id === 'settingsModal') $('settingsModal').classList.add('hidden'); };
+$('btnResetStats').onclick = () => { scores = {}; recent = []; LS.set('scores', scores); LS.set('recent', recent); renderStats(); renderCats(); renderPhrase(); if (cues.length) renderCueList(); };
+
+/* ================= Init ================= */
+renderCats(); renderPhrase(); renderStats(); setSub('lib'); setMode('shadow');
+if (!settings.apiKey) $('chatStatus').textContent = 'ใส่ Gemini API Key ที่ปุ่ม ⚙️ เพื่อใช้โหมดสนทนากับ AI';
+</script>
+</body>
+</html>

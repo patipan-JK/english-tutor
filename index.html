@@ -480,44 +480,102 @@ function speak(text, opts = {}) {
 /* ================= Speech Recognition ================= */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 if (!SR) $('srWarn').classList.remove('hidden');
-let recog = null, listening = false;
+// Mobile browsers can't share the mic between SpeechRecognition and getUserMedia → use a simulated visualizer there
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+let recog = null, listening = false, session = 0, micBtn = null, micCleanup = null;
+const MIC_ERR = {
+  'not-allowed': 'กรุณาอนุญาตให้ใช้ไมโครโฟน (กดไอคอนแม่กุญแจข้างแถบที่อยู่ → ไมโครโฟน → อนุญาต)',
+  'service-not-allowed': 'เบราว์เซอร์ไม่อนุญาตให้รู้จำเสียง ลองใช้ Chrome หรือ Safari',
+  'audio-capture': 'ไม่พบไมโครโฟน หรือไมค์ถูกแอปอื่นใช้งานอยู่',
+  'network': 'การรู้จำเสียงต้องใช้อินเทอร์เน็ต กรุณาตรวจสอบการเชื่อมต่อ'
+};
+function micNotice(msg) { $('chatStatus').textContent = msg; ['resLib', 'resVid'].forEach(id => { const b = $(id); if (b && !b.closest('.hidden')) { b.classList.remove('hidden'); b.innerHTML = `<p class="text-rose-500 text-sm">🎙️ ${esc(msg)}</p>`; } }); }
 function listen({ btn, canvas, onResult, onInterim }) {
   if (!SR) { $('srWarn').classList.remove('hidden'); return; }
-  if (listening) { recog.stop(); return; }
+  // pressing again while listening = stop now (and force-finish if the browser never fires onend)
+  if (listening) {
+    try { recog.stop(); } catch {}
+    const s = session; setTimeout(() => { if (s === session && listening && micCleanup) micCleanup(true); }, 1500);
+    return;
+  }
+  // make sure any previous instance is fully gone
+  if (recog) { try { recog.onend = recog.onerror = recog.onresult = null; recog.abort(); } catch {} recog = null; }
   speechSynthesis.cancel();
-  recog = new SR();
-  recog.lang = settings.accent; recog.interimResults = true; recog.maxAlternatives = 1; recog.continuous = false;
-  let finalText = '';
-  recog.onstart = () => { listening = true; btn.classList.add('mic-on'); btn.innerHTML = '<i class="fa-solid fa-stop"></i>'; startViz(canvas); };
-  recog.onresult = e => {
+  const my = ++session;
+  const r = new SR(); recog = r;
+  r.lang = settings.accent; r.interimResults = true; r.maxAlternatives = 1; r.continuous = false;
+  let finalText = '', interimText = '', done = false;
+  micBtn = btn;
+  const setBtn = on => { btn.classList.toggle('mic-on', on); btn.innerHTML = on ? '<i class="fa-solid fa-stop"></i>' : '<i class="fa-solid fa-microphone"></i>'; };
+  micCleanup = (deliver = true) => {
+    if (done) return; done = true;
+    clearTimeout(watchdog);
+    if (my === session) { listening = false; recog = null; micCleanup = null; }
+    setBtn(false); stopViz();
+    try { r.onend = r.onerror = r.onresult = null; r.abort(); } catch {}
+    if (deliver) onResult((finalText || interimText).trim());
+  };
+  // safety net: never stay "listening" forever
+  const watchdog = setTimeout(() => micCleanup(true), 20000);
+  r.onstart = () => { if (my !== session) return; listening = true; setBtn(true); startViz(canvas, my); };
+  r.onresult = e => {
     let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
       if (e.results[i].isFinal) finalText += e.results[i][0].transcript; else interim += e.results[i][0].transcript;
     }
-    onInterim && onInterim(finalText + interim);
+    interimText = finalText + interim;
+    onInterim && onInterim(interimText);
   };
-  recog.onerror = e => { if (e.error === 'not-allowed') $('chatStatus').textContent = 'กรุณาอนุญาตให้ใช้ไมโครโฟน'; };
-  recog.onend = () => {
-    listening = false; btn.classList.remove('mic-on'); btn.innerHTML = '<i class="fa-solid fa-microphone"></i>'; stopViz();
-    onResult(finalText.trim());
+  r.onerror = e => {
+    if (e.error === 'aborted') return;
+    if (e.error !== 'no-speech' && MIC_ERR[e.error]) micNotice(MIC_ERR[e.error]);
+    micCleanup(true);
   };
-  recog.start();
+  r.onend = () => micCleanup(true);
+  listening = true; setBtn(true);   // reflect state immediately, even before onstart
+  try { r.start(); }
+  catch (err) {   // "already started" etc. → reset and let the user tap again
+    micCleanup(false);
+    micNotice('ไมค์ยังไม่พร้อม กรุณากดอีกครั้ง');
+  }
 }
 
 /* ================= Audio Visualizer ================= */
-let audioCtx, analyser, micStream, vizRAF;
-async function startViz(canvasId) {
-  const cv = $(canvasId), ctx = cv.getContext('2d');
+let audioCtx = null, analyser = null, micStream = null, vizRAF = null, vizSession = 0;
+function prepCanvas(canvasId) {
+  const cv = $(canvasId); if (!cv) return null;
   cv.width = cv.clientWidth * devicePixelRatio; cv.height = cv.clientHeight * devicePixelRatio;
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    analyser = audioCtx.createAnalyser(); analyser.fftSize = 1024;
-    audioCtx.createMediaStreamSource(micStream).connect(analyser);
-  } catch { return; }
+  return cv;
+}
+async function startViz(canvasId, my) {
+  stopViz(); vizSession = my;
+  const cv = prepCanvas(canvasId); if (!cv) return;
+  const ctx = cv.getContext('2d');
+  if (IS_MOBILE || !navigator.mediaDevices) {
+    // simulated gentle wave (does not touch the microphone)
+    let t = 0;
+    const draw = () => {
+      if (vizSession !== my) return;
+      t += 0.12; ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.lineWidth = 2 * devicePixelRatio; ctx.strokeStyle = '#f43f5e'; ctx.beginPath();
+      for (let x = 0; x <= cv.width; x += 4) {
+        const y = cv.height / 2 + Math.sin(x / 18 + t) * Math.sin(t * 0.7 + x / 90) * cv.height * 0.3;
+        x ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.stroke(); vizRAF = requestAnimationFrame(draw);
+    };
+    draw(); return;
+  }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { return; }
+  if (vizSession !== my) { stream.getTracks().forEach(t => t.stop()); return; }   // recognition already ended → release mic
+  micStream = stream;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = audioCtx.createAnalyser(); analyser.fftSize = 1024;
+  audioCtx.createMediaStreamSource(stream).connect(analyser);
   const data = new Uint8Array(analyser.fftSize);
   const draw = () => {
-    if (!analyser) return;
+    if (vizSession !== my || !analyser) return;
     analyser.getByteTimeDomainData(data);
     ctx.clearRect(0, 0, cv.width, cv.height);
     ctx.lineWidth = 2 * devicePixelRatio; ctx.strokeStyle = '#f43f5e'; ctx.beginPath();
@@ -528,13 +586,18 @@ async function startViz(canvasId) {
   draw();
 }
 function stopViz() {
+  vizSession = -1;
   cancelAnimationFrame(vizRAF);
   if (micStream) micStream.getTracks().forEach(t => t.stop());
   if (audioCtx) audioCtx.close().catch(() => {});
   micStream = audioCtx = analyser = null;
-  ['vizLib', 'vizVid', 'vizChat'].forEach(id => { const c = $(id); c.getContext('2d').clearRect(0, 0, c.width, c.height); });
+  ['vizLib', 'vizVid', 'vizChat'].forEach(id => { const c = $(id); if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height); });
 }
-function stopAll() { try { recog && recog.abort(); } catch {} speechSynthesis.cancel(); }
+function stopAll() {
+  if (listening && micCleanup) micCleanup(false);
+  else if (recog) { try { recog.abort(); } catch {} }
+  speechSynthesis.cancel();
+}
 
 /* ================= Scoring (shared) ================= */
 const norm = s => s.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9' ]/g, ' ').split(/\s+/).filter(Boolean);

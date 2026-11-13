@@ -293,6 +293,16 @@
       <p class="text-xs text-stone-500 dark:text-stone-400 mt-1">ขอรับฟรีที่ aistudio.google.com/apikey — เก็บไว้ในเครื่องนี้เท่านั้น</p>
     </div>
     <div>
+      <label class="text-sm font-semibold">โมเดล AI</label>
+      <input id="modelName" list="modelList" class="w-full mt-1 px-3 py-2 rounded-xl bg-stone-100 dark:bg-zinc-800" placeholder="gemini-flash-latest">
+      <datalist id="modelList">
+        <option value="gemini-flash-latest">ล่าสุดเสมอ (แนะนำ)</option>
+        <option value="gemini-3.7-flash"></option><option value="gemini-3.6-flash"></option>
+        <option value="gemini-3.5-flash"></option><option value="gemini-3.5-flash-lite">เร็ว ประหยัดโควต้า</option>
+      </datalist>
+      <p class="text-xs text-stone-500 dark:text-stone-400 mt-1">ถ้าโมเดลที่เลือกถูกปิด แอปจะสลับไปใช้รุ่นที่ใช้งานได้ให้อัตโนมัติ</p>
+    </div>
+    <div>
       <label class="text-sm font-semibold">สำเนียง (Accent)</label>
       <select id="accent" class="w-full mt-1 px-3 py-2 rounded-lg bg-stone-100 dark:bg-zinc-800">
         <option value="en-US">🇺🇸 American (en-US)</option>
@@ -384,13 +394,33 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem('evt_' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('evt_' + k, JSON.stringify(v)); } catch {} }
 };
-const settings = Object.assign({ apiKey: '', accent: 'en-US', voice: '', rate: 1, pitch: 1, theme: 'light' }, LS.get('settings', {}));
+const settings = Object.assign({ model: 'gemini-flash-latest', apiKey: '', accent: 'en-US', voice: '', rate: 1, pitch: 1, theme: 'light' }, LS.get('settings', {}));
 let scores = LS.get('scores', {});     // key -> best score
 let clips = LS.get('clips', {});       // phraseKey -> {id,start,end}
 let recent = LS.get('recent', []);     // recently practiced sentences
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+if (!settings.model || settings.model === 'gemini-2.5-flash') settings.model = 'gemini-flash-latest';
 if (location.protocol === 'file:') $('fileWarn').classList.remove('hidden');
+
+/* ================= Gemini API (auto model fallback) ================= */
+const GEM_MODELS = ['gemini-flash-latest', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest'];
+async function gemFetch(opts) {
+  const order = [settings.model, ...GEM_MODELS.filter(m => m !== settings.model)].filter(Boolean);
+  let last = null;
+  for (const m of order) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`, opts);
+    const data = await res.json().catch(() => ({ error: { message: 'HTTP ' + res.status } }));
+    const msg = (data.error && data.error.message || '').toLowerCase();
+    const modelProblem = data.error && (res.status === 404 || /not found|not supported|no longer|deprecated|shut down|is not available|unknown model/.test(msg));
+    if (!modelProblem) {
+      if (!data.error && m !== settings.model) { settings.model = m; LS.set('settings', settings); }
+      return { json: async () => data };
+    }
+    last = data;
+  }
+  return { json: async () => last || { error: { message: 'ไม่พบโมเดล Gemini ที่ใช้งานได้ — ลองระบุชื่อโมเดลเองในหน้าตั้งค่า' } } };
+}
 
 /* ================= Theme & Tabs ================= */
 function applyTheme() {
@@ -704,9 +734,9 @@ $('hideMastered').onchange = () => { hideMastered = $('hideMastered').checked; L
 /* ---- AI phrase generator ---- */
 async function geminiJSON(prompt) {
   if (!settings.apiKey) throw new Error('กรุณาใส่ Gemini API Key ในหน้าตั้งค่าก่อน');
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(settings.apiKey)}`, {
+  const res = await gemFetch({
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, responseMimeType: 'application/json' } })
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json' } })
   });
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
@@ -894,11 +924,11 @@ Rules:
 - Include a natural Thai translation in "th".
 - Skip music, silence and non-English speech.
 Return ONLY a JSON object: {"title":"video title or short description","segments":[{"start":12.3,"end":15.8,"text":"...","th":"..."}]}`;
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(settings.apiKey)}`, {
+    const res = await gemFetch({
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ fileData: { fileUri: `https://www.youtube.com/watch?v=${id}` } }, { text: prompt }] }],
-        generationConfig: { temperature: 0.2, responseMimeType: 'application/json' }
+        generationConfig: { responseMimeType: 'application/json' }
       })
     });
     const data = await res.json();
@@ -1092,12 +1122,12 @@ async function sendChat(text) {
   history.push({ role: 'user', parts: [{ text }] });
   $('chatStatus').textContent = '🤔 AI กำลังคิด...';
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(settings.apiKey)}`, {
+    const res = await gemFetch({
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: sysPrompt() }] },
         contents: history.slice(-20),
-        generationConfig: { temperature: 0.8, responseMimeType: 'application/json' }
+        generationConfig: { responseMimeType: 'application/json' }
       })
     });
     const data = await res.json();
@@ -1221,7 +1251,7 @@ function renderStatsPage() {
 
 /* ================= Settings ================= */
 function openSettings() {
-  $('apiKey').value = settings.apiKey; $('accent').value = settings.accent;
+  $('apiKey').value = settings.apiKey; $('modelName').value = settings.model; $('accent').value = settings.accent;
   $('rate').value = settings.rate; $('pitch').value = settings.pitch;
   $('rateVal').textContent = (+settings.rate).toFixed(1); $('pitchVal').textContent = (+settings.pitch).toFixed(1);
   loadVoices(); $('settingsModal').classList.remove('hidden');
@@ -1231,7 +1261,7 @@ $('accent').onchange = () => { settings.accent = $('accent').value; settings.voi
 $('rate').oninput = () => $('rateVal').textContent = (+$('rate').value).toFixed(1);
 $('pitch').oninput = () => $('pitchVal').textContent = (+$('pitch').value).toFixed(1);
 $('btnCloseSettings').onclick = () => {
-  Object.assign(settings, { apiKey: $('apiKey').value.trim(), accent: $('accent').value, voice: $('voice').value, rate: +$('rate').value, pitch: +$('pitch').value });
+  Object.assign(settings, { model: $('modelName').value.trim() || 'gemini-flash-latest', apiKey: $('apiKey').value.trim(), accent: $('accent').value, voice: $('voice').value, rate: +$('rate').value, pitch: +$('pitch').value });
   LS.set('settings', settings); $('settingsModal').classList.add('hidden');
 };
 $('settingsModal').onclick = e => { if (e.target.id === 'settingsModal') $('settingsModal').classList.add('hidden'); };

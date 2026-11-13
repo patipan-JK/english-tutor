@@ -53,7 +53,17 @@
 
     <!-- Library pane -->
     <div id="paneLib">
-      <div id="catBar" class="flex flex-wrap gap-2 mb-4"></div>
+      <div id="catBar" class="flex flex-wrap gap-2 mb-3"></div>
+      <div class="flex flex-wrap gap-2 items-center mb-3 text-sm">
+        <select id="genLevel" class="px-2 py-2 rounded-lg bg-white dark:bg-slate-800 shadow" title="ระดับประโยคที่ AI สร้าง">
+          <option value="beginner (A2)">ระดับ: ง่าย</option><option value="intermediate (B1-B2)" selected>ระดับ: กลาง</option><option value="advanced (C1)">ระดับ: ยาก</option>
+        </select>
+        <button id="btnGen" class="px-3 py-2 rounded-lg bg-gradient-to-r from-indigo-500 to-fuchsia-500 text-white font-semibold disabled:opacity-50"></button>
+        <input id="genTopic" class="flex-1 min-w-[180px] px-3 py-2 rounded-lg bg-white dark:bg-slate-800 shadow" placeholder="หรือพิมพ์หัวข้อใหม่ เช่น คุยกับคนไข้ต่างชาติ">
+        <button id="btnGenTopic" class="px-3 py-2 rounded-lg bg-white dark:bg-slate-800 shadow font-semibold disabled:opacity-50"><i class="fa-solid fa-plus"></i> สร้างหมวด</button>
+      </div>
+      <label class="flex items-center gap-2 text-sm mb-3 cursor-pointer text-slate-600 dark:text-slate-300"><input type="checkbox" id="hideMastered" class="w-4 h-4"> ซ่อนประโยคที่ผ่านแล้ว (จนกว่าจะถึงรอบทวน)</label>
+      <div id="genMsg" class="hidden text-sm mb-3"></div>
 
       <div class="bg-white dark:bg-slate-800 rounded-2xl shadow p-6">
         <div class="flex justify-between items-center text-sm text-slate-500 dark:text-slate-400 mb-2">
@@ -448,48 +458,144 @@ function renderStats() {
 }
 function interimTo(boxId) { return t => { const b = $(boxId); b.classList.remove('hidden'); b.innerHTML = `<p class="text-slate-500">🎙️ ${esc(t)}…</p>`; }; }
 
-/* ================= Library (phrases + review) ================= */
-let curCat = Object.keys(PHRASES)[0], curIdx = 0;
-function getList() {
-  if (curCat === REVIEW) {
-    const all = [];
-    Object.entries(PHRASES).forEach(([cat, arr]) => arr.forEach((p, i) => {
-      const k = cat + '|' + i; if (scores[k] !== undefined && scores[k] < 80) all.push({ cat, idx: i, p, key: k });
-    }));
-    return all.sort((a, b) => scores[a.key] - scores[b.key]);
+/* ================= Library (phrases + SRS + daily set + AI generator) ================= */
+const DAILY = '📅 วันนี้', AIDAILY = '✨ AI Daily', DAILY_SIZE = 10, INTERVALS = [1, 3, 7, 14, 30], DAY = 86400000;
+const MIXED_TOPIC = 'mixed everyday situations: small talk, dining, shopping, travel, work, feelings and reactions';
+let custom = LS.get('custom', {});   // cat -> [[en, th, ctx], ...]
+let srs = LS.get('srs', {});         // key -> {box, due, passed, last}
+let daily = LS.get('daily', null);   // {date, keys}
+let hideMastered = LS.get('hideMastered', true);
+let curCat = DAILY, curIdx = 0, curList = [], genBusy = false;
+const todayStr = () => new Date().toLocaleDateString('en-CA');
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+function allCats() {
+  const o = {};
+  Object.keys(PHRASES).forEach(c => o[c] = [...PHRASES[c]]);
+  Object.entries(custom).forEach(([c, a]) => { o[c] = (o[c] || []).concat(a); });
+  return o;
+}
+function allItems() {
+  const out = [];
+  Object.entries(allCats()).forEach(([cat, arr]) => arr.forEach((p, i) => out.push({ cat, idx: i, p, key: cat + '|' + i })));
+  return out;
+}
+const isResting = k => srs[k] && srs[k].passed && srs[k].due > Date.now();
+function dueItems() {
+  const now = Date.now();
+  return allItems().filter(it => {
+    const s = srs[it.key];
+    return s ? s.due <= now : (scores[it.key] !== undefined && scores[it.key] < 80);
+  }).sort((a, b) => (scores[a.key] ?? 0) - (scores[b.key] ?? 0));
+}
+function updateSrs(k, score) {
+  const s = srs[k], now = Date.now();
+  if (score >= 80) {
+    const box = s && s.passed ? Math.min(s.box + 1, INTERVALS.length - 1) : 0;
+    srs[k] = { box, due: now + INTERVALS[box] * DAY, passed: true, last: todayStr() };
+  } else {
+    srs[k] = { box: 0, due: now, passed: false, last: todayStr() };
   }
-  return PHRASES[curCat].map((p, i) => ({ cat: curCat, idx: i, p, key: curCat + '|' + i }));
+  LS.set('srs', srs);
 }
-const curItem = () => getList()[curIdx];
+
+/* ---- Daily set ---- */
+function buildDaily() {
+  if (daily && daily.date === todayStr()) return;
+  const due = dueItems().slice(0, DAILY_SIZE);
+  const fresh = shuffle(allItems().filter(it => !srs[it.key] && scores[it.key] === undefined));
+  daily = { date: todayStr(), keys: [...due.map(i => i.key), ...fresh.slice(0, DAILY_SIZE - due.length).map(i => i.key)] };
+  LS.set('daily', daily);
+  if (fresh.length < DAILY_SIZE) setTimeout(autoGenerate, 500);
+}
+async function autoGenerate() {
+  if (genBusy || !settings.apiKey || !daily) return;
+  const need = DAILY_SIZE - daily.keys.length; if (need <= 0) return;
+  genBusy = true;
+  try {
+    const before = (allCats()[AIDAILY] || []).length;
+    const added = await generatePhrases(AIDAILY, MIXED_TOPIC, $('genLevel').value, Math.max(need, 8));
+    const newKeys = Array.from({ length: added }, (_, i) => AIDAILY + '|' + (before + i)).slice(0, need);
+    daily.keys = daily.keys.concat(newKeys); LS.set('daily', daily);
+    if (curCat === DAILY) { const k = curItem()?.key; refreshList(); const p = curList.findIndex(i => i.key === k); curIdx = p >= 0 ? p : 0; renderPhrase(); }
+    renderCats();
+    genStatus(`✨ AI เติมประโยคใหม่ ${newKeys.length} ประโยคเข้าชุดวันนี้ให้แล้ว`, 'text-emerald-600 dark:text-emerald-400');
+  } catch (e) { /* silent */ } finally { genBusy = false; }
+}
+
+/* ---- Lists ---- */
+function getList(cat) {
+  if (cat === DAILY) {
+    buildDaily();
+    const map = {}; allItems().forEach(it => map[it.key] = it);
+    return daily.keys.map(k => map[k]).filter(Boolean);
+  }
+  if (cat === REVIEW) return dueItems();
+  const arr = allCats()[cat] || [];
+  const items = arr.map((p, i) => ({ cat, idx: i, p, key: cat + '|' + i }));
+  return hideMastered ? items.filter(it => !isResting(it.key)) : items;
+}
+function refreshList() { curList = getList(curCat); if (curIdx >= curList.length) curIdx = 0; }
+const curItem = () => curList[curIdx];
+
 function renderCats() {
-  $('catBar').innerHTML = '';
-  const reviewCount = Object.keys(scores).filter(k => !k.startsWith('vid|') && scores[k] < 80).length;
-  [...Object.keys(PHRASES), REVIEW].forEach(c => {
+  const bar = $('catBar'); bar.innerHTML = '';
+  const dueN = dueItems().length;
+  const dk = daily ? daily.keys : [];
+  const doneN = dk.filter(k => srs[k]?.last === todayStr()).length;
+  [DAILY, ...Object.keys(allCats()), REVIEW].forEach(c => {
+    const on = c === curCat;
+    let badge = '';
+    if (c === DAILY) badge = `${doneN}/${dk.length}`; else if (c === REVIEW) badge = String(dueN);
+    const badgeCls = on ? 'bg-white/30' : (c === REVIEW && dueN ? 'bg-rose-500 text-white' : 'bg-slate-200 dark:bg-slate-700');
     const b = document.createElement('button');
-    b.innerHTML = c === REVIEW ? `${c} <span class="ml-1 px-1.5 rounded-full text-xs ${c === curCat ? 'bg-white/30' : 'bg-rose-500 text-white'}">${reviewCount}</span>` : esc(c);
-    b.className = 'px-3 py-1.5 rounded-full text-sm font-semibold ' + (c === curCat ? 'bg-indigo-500 text-white' : 'bg-white dark:bg-slate-800 shadow');
-    b.onclick = () => { curCat = c; curIdx = 0; renderCats(); renderPhrase(); };
-    $('catBar').appendChild(b);
+    b.innerHTML = esc(c) + (badge ? ` <span class="ml-1 px-1.5 rounded-full text-xs ${badgeCls}">${badge}</span>` : '');
+    b.className = 'px-3 py-1.5 rounded-full text-sm font-semibold ' + (on ? 'bg-indigo-500 text-white' : 'bg-white dark:bg-slate-800 shadow');
+    b.onclick = () => { curCat = c; curIdx = 0; refreshList(); renderCats(); renderPhrase(); };
+    bar.appendChild(b);
   });
+  $('btnGen').innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> ขอประโยคใหม่${curCat === DAILY ? 'เข้าชุดวันนี้' : curCat === REVIEW ? '' : 'ในหมวดนี้'}`;
 }
+function statusHtml(k) {
+  const parts = [], b = scores[k], s = srs[k];
+  if (b !== undefined) parts.push(`<span class="${b >= 80 ? 'text-emerald-500' : 'text-amber-500'}"><i class="fa-solid fa-trophy"></i> best ${b}%</span>`);
+  if (s && s.passed) { const d = Math.ceil((s.due - Date.now()) / DAY); parts.push(d > 0 ? `<span class="text-sky-500">🎓 ทวนอีก ${d} วัน</span>` : '<span class="text-rose-500">⏰ ถึงรอบทวน</span>'); }
+  else if (s || (b !== undefined && b < 80)) parts.push('<span class="text-rose-500">🔁 รอทบทวน</span>');
+  else if (b === undefined) parts.push('<span class="text-indigo-500">🆕 ใหม่</span>');
+  if (s && s.last === todayStr()) parts.push('<span class="text-emerald-500">✅ วันนี้</span>');
+  return parts.join(' · ');
+}
+const EMPTY_MSG = {
+  [DAILY]: '<div class="text-4xl mb-2">📭</div>ยังไม่มีประโยคใหม่ในคลัง<br><span class="text-sm">กด ✨ ขอประโยคใหม่ ให้ AI สร้างชุดใหม่ให้ (ต้องใส่ Gemini API Key)</span>',
+  [REVIEW]: '<div class="text-4xl mb-2">🎉</div>ยังไม่มีประโยคที่ถึงรอบทบทวน<br><span class="text-sm">ประโยคที่พูดไม่ผ่าน หรือถึงกำหนดทวน (1 → 3 → 7 → 14 → 30 วัน) จะมาอยู่ที่นี่</span>',
+  other: '<div class="text-4xl mb-2">🎓</div>ผ่านทุกประโยคในหมวดนี้แล้ว<br><span class="text-sm">ประโยคจะกลับมาเมื่อถึงรอบทวน — กด ✨ ขอประโยคใหม่ เพื่อฝึกต่อ หรือเอาเครื่องหมายช่อง "ซ่อนประโยคที่ผ่านแล้ว" ออก</span>'
+};
 function renderPhrase() {
-  const list = getList();
   $('ytForm').classList.add('hidden');
-  if (!list.length) { $('phraseArea').classList.add('hidden'); $('emptyReview').classList.remove('hidden'); $('phraseIdx').textContent = ''; $('phraseDone').textContent = ''; ytHide(); return; }
+  if (!curList.length) {
+    $('phraseArea').classList.add('hidden'); $('emptyReview').classList.remove('hidden');
+    $('emptyReview').innerHTML = EMPTY_MSG[curCat] || EMPTY_MSG.other;
+    $('phraseIdx').textContent = ''; $('phraseDone').textContent = ''; ytHide(); return;
+  }
   $('phraseArea').classList.remove('hidden'); $('emptyReview').classList.add('hidden');
-  if (curIdx >= list.length) curIdx = 0;
-  const it = list[curIdx];
+  const it = curList[curIdx];
   $('phraseEn').textContent = it.p[0]; $('phraseTh').textContent = it.p[1];
-  $('phraseCtx').innerHTML = `<i class="fa-regular fa-lightbulb"></i> ${esc(it.p[2])}${curCat === REVIEW ? ` · <span class="text-indigo-500">${esc(it.cat)}</span>` : ''}`;
-  $('phraseIdx').textContent = `${curIdx + 1} / ${list.length}`;
-  const best = scores[it.key];
-  $('phraseDone').innerHTML = best !== undefined ? `<span class="${best >= 80 ? 'text-emerald-500' : 'text-amber-500'}"><i class="fa-solid fa-trophy"></i> best ${best}%</span>` : '';
+  const showCat = curCat === DAILY || curCat === REVIEW;
+  $('phraseCtx').innerHTML = `<i class="fa-regular fa-lightbulb"></i> ${esc(it.p[2])}${showCat ? ` · <span class="text-indigo-500">${esc(it.cat)}</span>` : ''}`;
+  $('phraseIdx').textContent = (curCat === DAILY ? '📅 ชุดวันนี้ ' : '') + `${curIdx + 1} / ${curList.length}`;
+  $('phraseDone').innerHTML = statusHtml(it.key);
   $('resLib').classList.add('hidden');
   const clip = clips[it.key];
   $('ytAdd').classList.toggle('hidden', !!clip);
   if (clip) ytShow(clip, false); else ytHide();
 }
-function moveLib(d) { const n = getList().length; if (!n) return; curIdx = (curIdx + d + n) % n; renderPhrase(); }
+function moveLib(d) {
+  const n = curList.length; if (!n) return;
+  const next = curIdx + d;
+  if (next >= n || next < 0) { refreshList(); if (!curList.length) return renderPhrase(); curIdx = next < 0 ? curList.length - 1 : 0; }
+  else curIdx = next;
+  renderPhrase();
+}
 $('btnListen').onclick = () => { const it = curItem(); if (!it) return; clips[it.key] ? ytPlayClip(clips[it.key]) : speak(it.p[0]); };
 $('btnSlow').onclick = () => { const it = curItem(); if (it) speak(it.p[0], { rate: 0.6 }); };
 $('btnPrev').onclick = () => moveLib(-1);
@@ -498,13 +604,87 @@ $('btnRec').onclick = () => {
   const it = curItem(); if (!it) return; ytStop();
   listen({ btn: $('btnRec'), canvas: 'vizLib', onInterim: interimTo('resLib'),
     onResult: said => {
-      const target = it.p[0], key = it.key;
-      renderResult('resLib', target, said, key);
-      const b = scores[key];
-      $('phraseDone').innerHTML = b !== undefined ? `<span class="${b >= 80 ? 'text-emerald-500' : 'text-amber-500'}"><i class="fa-solid fa-trophy"></i> best ${b}%</span>` : '';
+      const score = renderResult('resLib', it.p[0], said, it.key);
+      if (score !== null) updateSrs(it.key, score);
+      $('phraseDone').innerHTML = statusHtml(it.key);
       renderCats();
     } });
 };
+$('hideMastered').checked = hideMastered;
+$('hideMastered').onchange = () => { hideMastered = $('hideMastered').checked; LS.set('hideMastered', hideMastered); curIdx = 0; refreshList(); renderPhrase(); };
+
+/* ---- AI phrase generator ---- */
+async function geminiJSON(prompt) {
+  if (!settings.apiKey) throw new Error('กรุณาใส่ Gemini API Key ในหน้าตั้งค่าก่อน');
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(settings.apiKey)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, responseMimeType: 'application/json' } })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  const raw = data.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '[]';
+  return JSON.parse(raw.replace(/```json|```/g, ''));
+}
+async function generatePhrases(cat, topic, level, n) {
+  const existing = (allCats()[cat] || []).map(p => p[0]);
+  const prompt = `Create ${n} NEW, natural, commonly used spoken English phrases for a Thai learner practicing speaking by shadowing.
+Topic / situation: ${topic}
+Level: ${level}
+Prefer real expressions native speakers actually say (useful idioms, phrasal verbs, movie-style lines), 4-14 words each, varied in function (asking, reacting, explaining, polite requests).
+Do NOT repeat or closely paraphrase any of these existing phrases:
+${existing.slice(-80).map(e => '- ' + e).join('\n') || '(none)'}
+Return ONLY a JSON array: [{"en":"English phrase","th":"natural Thai translation","ctx":"short Thai note on when to use it"}]`;
+  const arr = await geminiJSON(prompt);
+  const seen = new Set(Object.values(allCats()).flat().map(p => norm(p[0]).join(' ')));
+  const fresh = [];
+  (Array.isArray(arr) ? arr : (arr.phrases || [])).forEach(x => {
+    if (!x || !x.en || !x.th) return;
+    const k = norm(x.en).join(' ');
+    if (!k || seen.has(k)) return;
+    seen.add(k); fresh.push([String(x.en).trim(), String(x.th).trim(), String(x.ctx || '').trim()]);
+  });
+  if (!fresh.length) throw new Error('AI ยังไม่ได้สร้างประโยคใหม่ ลองกดอีกครั้ง');
+  custom[cat] = (custom[cat] || []).concat(fresh); LS.set('custom', custom);
+  return fresh.length;
+}
+function genStatus(html, cls) { const m = $('genMsg'); m.className = 'text-sm mb-3 ' + (cls || ''); m.innerHTML = html; m.classList.toggle('hidden', !html); }
+async function runGen(cat, topic, n, intoDaily) {
+  if (genBusy) return false;
+  genBusy = true; $('btnGen').disabled = $('btnGenTopic').disabled = true;
+  genStatus('<i class="fa-solid fa-spinner fa-spin"></i> AI กำลังสร้างประโยคใหม่...', 'text-indigo-500');
+  try {
+    const before = (allCats()[cat] || []).length;
+    const added = await generatePhrases(cat, topic, $('genLevel').value, n);
+    const newKeys = Array.from({ length: added }, (_, i) => cat + '|' + (before + i));
+    if (intoDaily) { buildDaily(); daily.keys = daily.keys.concat(newKeys); LS.set('daily', daily); }
+    refreshList();
+    const pos = curList.findIndex(it => newKeys.includes(it.key)); curIdx = pos >= 0 ? pos : 0;
+    renderCats(); renderPhrase();
+    genStatus(`✨ เพิ่มประโยคใหม่ ${added} ประโยค${intoDaily ? 'เข้าชุดวันนี้' : ` ในหมวด “${esc(cat)}”`} แล้ว`, 'text-emerald-600 dark:text-emerald-400');
+    return true;
+  } catch (e) {
+    genStatus('⚠️ ' + esc(e.message), 'text-rose-500');
+    if (!settings.apiKey) openSettings();
+    return false;
+  } finally { genBusy = false; $('btnGen').disabled = $('btnGenTopic').disabled = false; }
+}
+$('btnGen').onclick = () => {
+  if (curCat === REVIEW) curCat = AIDAILY;
+  const intoDaily = curCat === DAILY;
+  const cat = intoDaily ? AIDAILY : curCat;
+  const topic = cat === AIDAILY ? MIXED_TOPIC : cat.replace(/^✨\s*/, '');
+  runGen(cat, topic, 8, intoDaily);
+};
+$('btnGenTopic').onclick = async () => {
+  const t = $('genTopic').value.trim();
+  if (!t) { genStatus('พิมพ์หัวข้อที่อยากฝึกก่อน เช่น "คุยกับคนไข้ต่างชาติที่เวชระเบียน"', 'text-amber-600'); return; }
+  const prev = curCat;
+  curCat = '✨ ' + t.replace(/\|/g, ' ').slice(0, 40);
+  const ok = await runGen(curCat, t, 10, false);
+  if (ok) $('genTopic').value = ''; else { curCat = prev; refreshList(); renderCats(); }
+};
+$('genTopic').onkeydown = e => { if (e.key === 'Enter') $('btnGenTopic').click(); };
+function initLib() { buildDaily(); curCat = DAILY; curIdx = 0; refreshList(); renderCats(); renderPhrase(); }
 
 /* ================= YouTube clips ================= */
 let ytPlayer = null, ytReady = false, ytPending = null, ytCurrent = null, ytAutoMic = false;
@@ -741,10 +921,10 @@ $('btnCloseSettings').onclick = () => {
   LS.set('settings', settings); $('settingsModal').classList.add('hidden');
 };
 $('settingsModal').onclick = e => { if (e.target.id === 'settingsModal') $('settingsModal').classList.add('hidden'); };
-$('btnResetStats').onclick = () => { scores = {}; recent = []; LS.set('scores', scores); LS.set('recent', recent); renderStats(); renderCats(); renderPhrase(); if (cues.length) renderCueList(); };
+$('btnResetStats').onclick = () => { scores = {}; recent = []; srs = {}; daily = null; ['scores','recent','srs','daily'].forEach(k => LS.set(k, k === 'daily' ? null : (k === 'recent' ? [] : {}))); renderStats(); initLib(); if (cues.length) renderCueList(); };
 
 /* ================= Init ================= */
-renderCats(); renderPhrase(); renderStats(); setSub('lib'); setMode('shadow');
+initLib(); renderStats(); setSub('lib'); setMode('shadow');
 if (!settings.apiKey) $('chatStatus').textContent = 'ใส่ Gemini API Key ที่ปุ่ม ⚙️ เพื่อใช้โหมดสนทนากับ AI';
 </script>
 </body>
